@@ -10,6 +10,7 @@ Accessibility Standard: WCAG 2.2 AA (Full contrast, keyboard navigable, 0px over
 """
 
 import sys
+import json
 import html
 import random
 import re
@@ -228,27 +229,28 @@ elif active_page == "Find Similar":
         unsafe_allow_html=True,
     )
 
-    fs_col1, fs_col2, fs_col3 = st.columns([3.2, 1.2, 1.0], vertical_alignment="center")
-    with fs_col1:
-        search_kw = st.text_input(
-            "Search movie to find similar titles",
-            placeholder="Type any movie (e.g. 3 Idiots, RRR, Inception, Dangal, Interstellar)...",
-            key="fs_search_input",
-            label_visibility="collapsed",
-        )
-    with fs_col2:
-        if st.button("🔍 Find Similar", type="primary", use_container_width=True):
-            if search_kw and search_kw.strip():
+    fs_form_col, fs_rand_col = st.columns([3.8, 1.2], vertical_alignment="center")
+    with fs_form_col:
+        with st.form(key="find_similar_form", clear_on_submit=False):
+            fc1, fc2 = st.columns([3.0, 1.2], vertical_alignment="center")
+            with fc1:
+                search_kw = st.text_input(
+                    "Search movie to find similar titles",
+                    placeholder="Type any movie (e.g. 3 Idiots, RRR, Inception, Dangal, Interstellar)...",
+                    key="fs_search_input",
+                    label_visibility="collapsed",
+                )
+            with fc2:
+                submit_fs = st.form_submit_button("🔍 Find Similar", type="primary", use_container_width=True)
+
+            if submit_fs and search_kw and search_kw.strip():
                 request_movie_switch(search_kw.strip())
-    with fs_col3:
+
+    with fs_rand_col:
         if st.button("🎲 Surprise Pick", use_container_width=True):
             popular_picks = recommender.get_popular_movies(top_n=30)
             rand_movie = random.choice(popular_picks)["title"]
             request_movie_switch(rand_movie)
-
-    if search_kw and search_kw.strip() and search_kw.strip().lower() != st.session_state.get("active_query", "").lower() and st.session_state.get("last_searched_kw") != search_kw.strip():
-        st.session_state["last_searched_kw"] = search_kw.strip()
-        request_movie_switch(search_kw.strip())
 
     current_target = st.session_state.get("active_query", "Interstellar (2014)")
     st.markdown(f"### 🎯 Movies Similar to *{current_target}*")
@@ -451,10 +453,10 @@ elif active_page == "Watchlist":
     st.markdown(
         """
         <div class="cm-hero">
-            <div class="cm-hero-kicker">Personal Collection</div>
+            <div class="cm-hero-kicker">Personal Collection (Session-Only)</div>
             <h1 class="cm-hero-title">Your Watchlist</h1>
             <div class="cm-hero-subtitle">
-                Films you've saved to watch next. Availability and streaming options for India are displayed automatically.
+                Films you've saved to watch next during this browser session. Notice: To persist your selections across visits, use the Export JSON option below.
             </div>
         </div>
         """,
@@ -469,14 +471,30 @@ elif active_page == "Watchlist":
                 <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">🔖</div>
                 <div style="font-size: 1.15rem; font-weight: 700; color: #FFFFFF; margin-bottom: 0.35rem;">Your Watchlist is empty</div>
                 <div style="font-size: 0.88rem; max-width: 440px; margin: 0 auto 1.25rem auto; color: #8B98A5;">
-                    Add movies to your watchlist on Discover or Find Similar to keep track of films you want to watch.
+                    Add movies to your watchlist on Discover or Find Similar to keep track of films you want to watch. (Stored for the duration of this browser session).
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(f"**Saved Titles ({len(watchlist)} films):**")
+        wl_top1, wl_top2, wl_top3 = st.columns([2.0, 1.2, 1.0], vertical_alignment="center")
+        with wl_top1:
+            st.markdown(f"**Saved Titles ({len(watchlist)} films — Current Session):**")
+        with wl_top2:
+            st.download_button(
+                "📥 Export Watchlist (JSON)",
+                data=json.dumps(watchlist, indent=2),
+                file_name="cinematch_watchlist.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with wl_top3:
+            if st.button("Clear All ✕", key="clear_watchlist_btn", use_container_width=True):
+                st.session_state["watchlist"] = []
+                st.toast("Watchlist cleared")
+                st.rerun()
+
         w_cols = st.columns(3)
         for w_idx, w_item in enumerate(watchlist):
             col = w_cols[w_idx % 3]
@@ -537,10 +555,10 @@ elif active_page == "History":
     st.markdown(
         """
         <div class="cm-hero">
-            <div class="cm-hero-kicker">Exploration Log</div>
+            <div class="cm-hero-kicker">Exploration Log (Session-Only)</div>
             <h1 class="cm-hero-title">Recently Explored Movies</h1>
             <div class="cm-hero-subtitle">
-                A timeline of films you've recently viewed or used to generate recommendations.
+                A timeline of films explored during this session. Note: Session history is cleared when the browser tab is closed.
             </div>
         </div>
         """,
@@ -549,9 +567,24 @@ elif active_page == "History":
 
     history = st.session_state.get("history", [])
     if not history:
-        st.info("No exploration history recorded yet. Explore movies on Discover or Find Similar to see them here.")
+        st.info("No exploration history recorded yet in this session. Explore movies on Discover or Find Similar to see them here.")
     else:
-        st.markdown(f"**Recently Viewed ({len(history)} titles):**")
+        h_top1, h_top2, h_top3 = st.columns([2.0, 1.2, 1.0], vertical_alignment="center")
+        with h_top1:
+            st.markdown(f"**Recently Viewed ({len(history)} titles — Current Session):**")
+        with h_top2:
+            st.download_button(
+                "📥 Export History (JSON)",
+                data=json.dumps(history, indent=2),
+                file_name="cinematch_history.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with h_top3:
+            if st.button("Clear Log ✕", key="clear_history_btn", use_container_width=True):
+                st.session_state["history"] = []
+                st.rerun()
+
         h_cols = st.columns(4)
         for h_idx, h_item in enumerate(history[:8]):
             col = h_cols[h_idx % 4]

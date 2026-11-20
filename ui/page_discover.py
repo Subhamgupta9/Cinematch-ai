@@ -531,6 +531,8 @@ def fetch_smart_recommendations(
             _local_res = _local_eng.recommend(query_title, top_n=top_n)
             _local_list = _local_res.get("recommendations", []) if isinstance(_local_res, dict) else _local_res
             for lr in _local_list:
+                avg_r = float(lr.get("avg_rating", 3.8))
+                v_cnt = int(lr.get("vote_count", 0))
                 recs.append({
                     "title": lr["title"],
                     "clean_title": lr.get("clean_title") or lr["title"],
@@ -538,19 +540,27 @@ def fetch_smart_recommendations(
                     "year": lr.get("year"),
                     "tmdb_id": str(lr.get("tmdbId") or ""),
                     "tmdbId": str(lr.get("tmdbId") or ""),
-                    "original_language": "en",
+                    "original_language": None,
                     "genre_names": lr.get("genres", "").split("|") if isinstance(lr.get("genres"), str) else [],
                     "similarity_score": lr.get("similarity_score", 0.85),
                     "ranking_score": lr.get("similarity_score", 0.85),
-                    "vote_average": round(float(lr.get("avg_rating", 3.8)) * 2, 1),
+                    "avg_rating": avg_r,
+                    "vote_count": v_cnt,
+                    "rating_scale": "5.0",
+                    "provenance": "MovieLens",
                     "overview": lr.get("description", "") or lr.get("overview", ""),
                     "source": "catalog_offline_engine",
-                    "explanation": {"match_score_pct": int(round(lr.get("similarity_score", 0.85) * 100)), "summary": "Matching narrative themes and genre alignment"},
+                    "explanation": {
+                        "match_score_pct": int(round(lr.get("similarity_score", 0.85) * 100)),
+                        "summary": f"★ {avg_r:.1f}/5.0 (MovieLens, {v_cnt:,} ratings)",
+                    },
                 })
 
             if not recs and hasattr(_local_eng, "movies_df") and _local_eng.movies_df is not None:
                 _pop = _local_eng.movies_df.sort_values(by="weighted_rating", ascending=False).head(top_n)
                 for _, lr in _pop.iterrows():
+                    avg_r = float(lr.get("avg_rating", 4.0))
+                    v_cnt = int(lr.get("vote_count", 0))
                     recs.append({
                         "title": lr["title"],
                         "clean_title": lr.get("clean_title") or lr["title"],
@@ -558,14 +568,20 @@ def fetch_smart_recommendations(
                         "year": int(lr["year"]) if pd.notna(lr.get("year")) else None,
                         "tmdb_id": str(lr.get("tmdbId") or ""),
                         "tmdbId": str(lr.get("tmdbId") or ""),
-                        "original_language": "en",
+                        "original_language": None,
                         "genre_names": lr.get("genres", "").split("|") if isinstance(lr.get("genres"), str) else [],
                         "similarity_score": 0.85,
                         "ranking_score": 0.85,
-                        "vote_average": round(float(lr.get("avg_rating", 4.0)) * 2, 1),
+                        "avg_rating": avg_r,
+                        "vote_count": v_cnt,
+                        "rating_scale": "5.0",
+                        "provenance": "MovieLens",
                         "overview": lr.get("description", ""),
                         "source": "catalog_popular_fallback",
-                        "explanation": {"match_score_pct": 85, "summary": "Acclaimed title from curated local catalog"},
+                        "explanation": {
+                            "match_score_pct": 85,
+                            "summary": f"★ {avg_r:.1f}/5.0 (MovieLens, {v_cnt:,} ratings)",
+                        },
                     })
         except Exception:
             pass
@@ -655,55 +671,49 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
         # ---------------------------------------------------------------------
         if active_mode == "✨ By AI Taste":
             st.markdown(
-                '<div class="aura-section-kicker">✨ AI TASTE & PREFERENCE SEARCH</div>',
+                '<div class="aura-section-kicker">✨ THEMATIC VIBE SEARCH (KEYWORD MATCHING)</div>',
                 unsafe_allow_html=True,
             )
             st.markdown(
                 """
                 <div style="font-size: 0.84rem; color: #94A3B8; line-height: 1.5; margin-bottom: 0.75rem;">
-                    Describe your desired cinema vibe, mood, storyline, or favorite themes in natural language.
+                    Describe your desired cinema vibe, mood, storyline, or favorite themes. Matched using curated thematic keywords and genre rules.
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            ai_pref_input = st.text_input(
-                "Enter your cinema preference / vibe",
-                value=st.session_state.get("ai_vibe_input_val", ""),
-                placeholder="e.g. I want to watch a funny movie, mind-bending space thriller, emotional college friendship...",
-                key="ai_vibe_input",
-                label_visibility="collapsed",
-            )
+            with st.form(key="ai_vibe_form", clear_on_submit=False):
+                ai_pref_input = st.text_input(
+                    "Enter your cinema preference / vibe",
+                    value=st.session_state.get("ai_vibe_input_val", ""),
+                    placeholder="e.g. funny lighthearted movie, mind-bending space thriller, emotional college friendship...",
+                    key="ai_vibe_input",
+                    label_visibility="collapsed",
+                )
+                submit_vibe = st.form_submit_button("✨ Match My Vibe", type="primary", use_container_width=True)
 
-            ai_c1, ai_c2 = st.columns([1.8, 1.2], vertical_alignment="center")
-            with ai_c1:
-                if st.button("✨ Match My Vibe & Taste", key="submit_ai_vibe_btn", type="primary", use_container_width=True):
-                    if ai_pref_input and ai_pref_input.strip():
-                        st.session_state["ai_preference_prompt"] = ai_pref_input.strip()
-                        st.session_state["active_query"] = ai_pref_input.strip()
-                        st.session_state["selected_entity"] = None
-                        st.rerun()
-            with ai_c2:
-                if st.button("🎲 Random Vibe", key="random_vibe_btn", use_container_width=True):
-                    vibe_prompts = [
-                        "Mind-bending sci-fi about memory and time dilation",
-                        "Heartwarming friendship comedy about student life like 3 Idiots",
-                        "High-stakes historical war action with epic heroism like RRR",
-                        "Dark psychological crime thriller with unpredictable twists",
-                        "Poetic romantic drama with stunning cinematography",
-                        "Underdog sports triumph inspired by real-life struggle",
-                        "I want to watch a funny lighthearted movie",
-                    ]
-                    chosen_vibe = random.choice(vibe_prompts)
-                    st.session_state["ai_preference_prompt"] = chosen_vibe
-                    st.session_state["active_query"] = chosen_vibe
-                    st.session_state["selected_entity"] = None
-                    st.rerun()
-
-            if ai_pref_input and ai_pref_input.strip() and ai_pref_input.strip() != st.session_state.get("last_ai_vibe_submitted"):
-                st.session_state["last_ai_vibe_submitted"] = ai_pref_input.strip()
+            if submit_vibe and ai_pref_input and ai_pref_input.strip():
+                st.session_state["ai_vibe_input_val"] = ai_pref_input.strip()
                 st.session_state["ai_preference_prompt"] = ai_pref_input.strip()
                 st.session_state["active_query"] = ai_pref_input.strip()
+                st.session_state["selected_entity"] = None
+                st.rerun()
+
+            if st.button("🎲 Random Vibe", key="random_vibe_btn", use_container_width=True):
+                vibe_prompts = [
+                    "Mind-bending sci-fi about memory and time dilation",
+                    "Heartwarming friendship comedy about student life like 3 Idiots",
+                    "High-stakes historical war action with epic heroism like RRR",
+                    "Dark psychological crime thriller with unpredictable twists",
+                    "Poetic romantic drama with stunning cinematography",
+                    "Underdog sports triumph inspired by real-life struggle",
+                    "I want to watch a funny lighthearted movie",
+                ]
+                chosen_vibe = random.choice(vibe_prompts)
+                st.session_state["ai_vibe_input_val"] = chosen_vibe
+                st.session_state["ai_preference_prompt"] = chosen_vibe
+                st.session_state["active_query"] = chosen_vibe
                 st.session_state["selected_entity"] = None
                 st.rerun()
 
@@ -761,20 +771,21 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                 unsafe_allow_html=True,
             )
 
-            # Search bar with search button
-            s_col1, s_col2 = st.columns([2.5, 1.0], vertical_alignment="center")
-            with s_col1:
-                search_text = st.text_input(
-                    "Search movie",
-                    value=st.session_state.get("search_query_input", ""),
-                    placeholder="e.g. 3 Idiots, RRR, Inception, Dangal...",
-                    key="movie_search_text_input",
-                    label_visibility="collapsed",
-                )
-            with s_col2:
-                search_clicked = st.button("Search 🔍", key="search_submit_btn", type="primary", use_container_width=True)
+            # Search bar with search form
+            with st.form(key="movie_search_form", clear_on_submit=False):
+                s_col1, s_col2 = st.columns([2.5, 1.0], vertical_alignment="center")
+                with s_col1:
+                    search_text = st.text_input(
+                        "Search movie",
+                        value=st.session_state.get("search_query_input", ""),
+                        placeholder="e.g. 3 Idiots, RRR, Inception, Dangal...",
+                        key="movie_search_text_input",
+                        label_visibility="collapsed",
+                    )
+                with s_col2:
+                    search_clicked = st.form_submit_button("Search 🔍", type="primary", use_container_width=True)
 
-            if (search_clicked or search_text) and search_text.strip():
+            if search_clicked and search_text and search_text.strip():
                 st.session_state["search_query_input"] = search_text.strip()
                 if has_tmdb_key:
                     with st.spinner("Searching catalog..."):
@@ -1078,7 +1089,8 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                         _df = _df[_df["genres"].str.contains(g_name, case=False, na=False)]
                     _df = _df[_df["vote_count"] >= 20].sort_values(by="weighted_rating", ascending=False)
                     for _, row in _df.head(6).iterrows():
-                        r_vote = round(float(row.get("avg_rating", 3.8)) * 2, 1)
+                        avg_r = float(row.get("avg_rating", 3.8))
+                        v_cnt = int(row.get("vote_count", 0))
                         recommendations.append({
                             "title": row["title"],
                             "clean_title": row.get("clean_title") or row["title"],
@@ -1086,16 +1098,19 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                             "year": int(row["year"]) if pd.notna(row.get("year")) else None,
                             "tmdb_id": str(row.get("tmdbId") or ""),
                             "tmdbId": str(row.get("tmdbId") or ""),
-                            "original_language": "en",
+                            "original_language": None,
                             "genre_names": row.get("genres", "").split("|") if isinstance(row.get("genres"), str) else [g_name],
-                            "similarity_score": round(min(0.99, r_vote / 10.0), 2),
-                            "ranking_score": round(min(0.99, r_vote / 10.0), 2),
-                            "vote_average": r_vote,
+                            "similarity_score": round(min(0.99, avg_r / 5.0), 2),
+                            "ranking_score": round(min(0.99, avg_r / 5.0), 2),
+                            "avg_rating": avg_r,
+                            "vote_count": v_cnt,
+                            "rating_scale": "5.0",
+                            "provenance": "MovieLens",
                             "overview": row.get("description", "") or f"Acclaimed {g_name} cinema.",
                             "source": "catalog_genre_fallback",
                             "explanation": {
-                                "match_score_pct": int(round(min(99, max(60, r_vote * 10)))),
-                                "summary": f"⭐ Top acclaimed {g_name} classic ({int(row.get('vote_count', 0)):,} verified reviews)",
+                                "match_score_pct": int(round(min(99, max(60, (avg_r / 5.0) * 100)))),
+                                "summary": f"★ {avg_r:.1f}/5.0 (MovieLens, {v_cnt:,} ratings)",
                             },
                         })
                 except Exception:
@@ -1181,7 +1196,8 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                     else:
                         _df = _df.sort_values(by="weighted_rating", ascending=True)
                     for _, row in _df.head(6).iterrows():
-                        r_vote = round(float(row.get("avg_rating", 3.8)) * 2, 1)  # Scale 5-star to 10
+                        avg_r = float(row.get("avg_rating", 3.8))
+                        v_cnt = int(row.get("vote_count", 0))
                         recommendations.append({
                             "title": row["title"],
                             "clean_title": row.get("clean_title") or row["title"],
@@ -1189,16 +1205,19 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                             "year": int(row["year"]) if row.get("year") else None,
                             "tmdb_id": str(row.get("tmdbId") or ""),
                             "tmdbId": str(row.get("tmdbId") or ""),
-                            "original_language": "en",
+                            "original_language": None,
                             "genre_names": row.get("genres", "").split("|") if isinstance(row.get("genres"), str) else [],
-                            "similarity_score": round(min(0.99, r_vote / 10.0), 2),
-                            "ranking_score": round(min(0.99, r_vote / 10.0), 2),
-                            "vote_average": r_vote,
+                            "similarity_score": round(min(0.99, avg_r / 5.0), 2),
+                            "ranking_score": round(min(0.99, avg_r / 5.0), 2),
+                            "avg_rating": avg_r,
+                            "vote_count": v_cnt,
+                            "rating_scale": "5.0",
+                            "provenance": "MovieLens",
                             "overview": row.get("description", "") or "Acclaimed cinematic masterpiece recognized for storytelling excellence.",
                             "source": "catalog_rating_ranked",
                             "explanation": {
-                                "match_score_pct": int(round(min(99, max(60, r_vote * 10)))),
-                                "summary": f"⭐ {r_vote:.1f}/10 rating ({int(row.get('vote_count', 0)):,} verified reviews)",
+                                "match_score_pct": int(round(min(99, max(60, (avg_r / 5.0) * 100)))),
+                                "summary": f"★ {avg_r:.1f}/5.0 (MovieLens, {v_cnt:,} ratings)",
                             },
                         })
                 except Exception as e:

@@ -279,3 +279,27 @@ def test_deterministic_sort_order(hybrid):
 
     assert cids1 == cids2
     assert scores1 == scores2
+
+
+def test_evidence_policy_rejects_stop_words(hybrid):
+    """Verify that sharing only English stop words or out-of-vocab tokens does not satisfy evidence policy."""
+    # Shared tokens are solely English stop words omitted from TF-IDF vocabulary
+    q_soup = "the of and in on"
+    c_soup = "the of and at by"
+
+    passes, msg = hybrid.check_minimum_evidence(q_soup, c_soup, similarity_score=0.20)
+    assert passes is False
+    assert "No valid vectorizer vocabulary tokens shared" in msg
+
+
+def test_candidate_movielens_slice_and_language_preservation(hybrid):
+    """Verify that MovieLens candidate vectors are sliced directly and unknown languages remain None."""
+    res = hybrid.recommend("Pulp Fiction (1994)", top_n=5, api_key="")
+    assert res["success"] is True
+    assert len(res["recommendations"]) > 0
+
+    for r in res["recommendations"]:
+        if r.get("metadata_source") == "movielens":
+            # Language must be preserved as None rather than fabricated as 'en'
+            assert r.get("language") is None
+            assert r.get("origin_country") == []

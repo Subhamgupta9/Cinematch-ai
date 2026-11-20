@@ -16,7 +16,6 @@ Security & Resilience:
 import os
 import time
 import html
-import socket
 import urllib.parse
 from typing import Optional, Dict, Any, List
 import requests
@@ -27,27 +26,10 @@ POSTER_SIZE = "w342"
 BACKDROP_SIZE = "w780"
 LOGO_SIZE = "w92"
 
-# Self-healing DNS resolution for api.themoviedb.org to prevent ISP IPv6 routing timeouts
-_CLOUDFRONT_IPV4 = "13.224.245.63"
-_original_getaddrinfo = socket.getaddrinfo
-
-
-def _tmdb_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    if host == "api.themoviedb.org":
-        try:
-            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_CLOUDFRONT_IPV4, port))]
-        except Exception:
-            pass
-    return _original_getaddrinfo(host, port, family, type, proto, flags)
-
-
-socket.getaddrinfo = _tmdb_getaddrinfo
-
-
 def safe_tmdb_get(url: str, params: Optional[Dict[str, Any]] = None, timeout: float = 4.0, retries: int = 3) -> Dict[str, Any]:
     """
     Robust HTTP GET with automatic retries and browser headers.
-    Transparently recovers from WinError 10054 ConnectionResetErrors and transient timeouts.
+    Transparently recovers from connection errors and transient timeouts.
     """
     headers = {"User-Agent": "CineMatchAI/1.0 (Windows NT 10.0; Win64; x64)"}
     for attempt in range(retries):
@@ -92,9 +74,9 @@ def generate_fallback_poster_svg(title: str, year: Optional[int] = None, genres:
     Generates a clean, accessible, modern SVG poster placeholder as a data URI.
     Explicitly labeled as generated placeholder artwork (never presented as an official poster).
     """
-    safe_title = html.escape(str(title)[:36] + ("..." if len(str(title)) > 36 else ""))
-    year_str = html.escape(f"({year})") if year else ""
-    genre_str = html.escape(" · ".join([str(g) for g in (genres or [])[:2]]))
+    safe_title = html.escape(str(title)[:36] + ("..." if len(str(title)) > 36 else ""), quote=True)
+    year_str = html.escape(f"({year})", quote=True) if year else ""
+    genre_str = html.escape(" · ".join([str(g) for g in (genres or [])[:2]]), quote=True)
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 342 513" width="342" height="513">
   <defs>

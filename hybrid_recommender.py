@@ -184,8 +184,16 @@ class HybridRecommender:
         if not filtered_shared:
             return False, "No non-synthetic tokens shared between query and candidate"
 
-        discriminative_count = sum(1 for t in filtered_shared if self.idf_map.get(t, 0.0) >= 4.0)
-        generic_count = sum(1 for t in filtered_shared if self.idf_map.get(t, 0.0) < 4.0)
+        # Align TF-IDF evidence checks with the actual vectorizer behavior:
+        # Only tokens present in the vectorizer's vocabulary (self.idf_map) represent actual TF-IDF evidence.
+        # Tokens omitted due to English stop words or vocabulary thresholds cannot count towards generic/discriminative evidence.
+        valid_vocab_tokens = {t for t in filtered_shared if t in self.idf_map}
+
+        if not valid_vocab_tokens:
+            return False, "No valid vectorizer vocabulary tokens shared between query and candidate"
+
+        discriminative_count = sum(1 for t in valid_vocab_tokens if self.idf_map[t] >= 4.0)
+        generic_count = sum(1 for t in valid_vocab_tokens if self.idf_map[t] < 4.0)
 
         if discriminative_count >= 1 or generic_count >= 2:
             return True, "Passes minimum evidence policy"
@@ -370,7 +378,7 @@ class HybridRecommender:
         Supports query by title string, MovieLens movieId, or UnifiedMovie instance.
         """
         self.initialize()
-        resolved_api_key = api_key or get_tmdb_api_key()
+        resolved_api_key = api_key if api_key is not None else get_tmdb_api_key()
 
         # 1. Resolve query into UnifiedMovie
         query_movie: Optional[UnifiedMovie] = None
@@ -386,26 +394,19 @@ class HybridRecommender:
                     query_movie = UnifiedMovie.from_movielens_row(matches.iloc[0].to_dict())
         elif isinstance(query, str):
             clean_str = query.strip()
-            stripped_title = re.sub(r"\s*\(\d{4}\)\s*", "", clean_str).strip()
-            # Try finding in local MovieLens preprocessed catalog first
-            df = self.candidate_generator._get_ml_preprocessed()
-            if df is not None:
-                # 1. Exact or case-insensitive match on title, clean_title, or stripped_title
-                matches = df[
-                    (df["title"].str.lower() == clean_str.lower())
-                    | (df["clean_title"].str.lower() == clean_str.lower())
-                    | (df["clean_title"].str.lower() == stripped_title.lower())
-                ]
-                if not matches.empty:
-                    query_movie = UnifiedMovie.from_movielens_row(matches.iloc[0].to_dict())
-                else:
-                    # 2. Title containing search
-                    part_matches = df[
-                        df["title"].str.lower().str.contains(re.escape(stripped_title.lower()))
-                        | df["clean_title"].str.lower().str.contains(re.escape(stripped_title.lower()))
+            # Try finding in local MovieLens preprocessed catalog using title, year, and prefix resolution
+            ml_idx, _ = self.recommender.find_movie_idx(clean_str)
+            if ml_idx is not None and self.recommender.movies_df is not None:
+                query_movie = UnifiedMovie.from_movielens_row(self.recommender.movies_df.iloc[ml_idx].to_dict())
+            else:
+                df = self.candidate_generator._get_ml_preprocessed()
+                if df is not None:
+                    matches = df[
+                        (df["title"].str.lower() == clean_str.lower())
+                        | (df["clean_title"].str.lower() == clean_str.lower())
                     ]
-                    if not part_matches.empty:
-                        query_movie = UnifiedMovie.from_movielens_row(part_matches.iloc[0].to_dict())
+                    if not matches.empty:
+                        query_movie = UnifiedMovie.from_movielens_row(matches.iloc[0].to_dict())
 
             # If not in local catalog, query TMDb global search if key available
             if query_movie is None and resolved_api_key:
@@ -469,8 +470,19 @@ class HybridRecommender:
             if cand_cid == query_cid:
                 continue  # Enforce self-exclusion invariant
 
-            cand_soup = self.build_feature_soup(cand)
-            cand_vec = self.project_to_vector(cand_soup)
+            # Optimized vector lookup: If candidate has MovieLens index, slice directly from tfidf_matrix
+            cand_ml_id = cand.movielens_movie_id
+            if (
+                cand_ml_id is not None
+                and cand_ml_id in self.recommender.movie_id_to_idx
+                and self.recommender.tfidf_matrix is not None
+            ):
+                ml_idx = self.recommender.movie_id_to_idx[cand_ml_id]
+                cand_vec = self.recommender.tfidf_matrix[ml_idx]
+                cand_soup = str(self.recommender.movies_df.iloc[ml_idx]["metadata_soup"])
+            else:
+                cand_soup = self.build_feature_soup(cand)
+                cand_vec = self.project_to_vector(cand_soup)
 
             score_info = self.score_candidate(
                 query_movie=query_movie,
@@ -501,7 +513,7 @@ class HybridRecommender:
                     "movieId": cand.movielens_movie_id,
                     "tmdbId": cand.tmdb_id,
                     "imdbId": cand.imdb_id,
-                    "language": cand.original_language or "en",
+                    "language": cand.original_language,  # Preserves None when unknown
                     "origin_country": cand.origin_country,
                     "metadata_source": cand.metadata_source,
                     "ranking_score": score_info["ranking_score"],

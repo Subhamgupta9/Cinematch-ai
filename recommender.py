@@ -35,6 +35,67 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 
+
+def normalize_title_prefix(raw_title: str) -> Tuple[str, str, Optional[int]]:
+    """
+    Normalizes movie titles with consistent article handling, prefix/suffix conversion,
+    and release year extraction.
+
+    Articles supported: English (The, A, An), French (Le, La, Les, L'),
+    Spanish (El, La, Los, Las), German (Der, Die, Das), Italian (Il, Lo, La).
+
+    Returns:
+        tuple: (canonical_title, article_stripped_title, extracted_year)
+    """
+    if not raw_title or not str(raw_title).strip():
+        return "", "", None
+
+    text = str(raw_title).strip()
+    match = re.search(r"\((\d{4})\)", text)
+    year = int(match.group(1)) if match else None
+
+    # Remove (YYYY) pattern
+    clean = re.sub(r"\s*\(\d{4}\)\s*", "", text).strip()
+
+    # Trailing article patterns to convert to leading
+    trailing_articles = [
+        (", The", "The"),
+        (", A", "A"),
+        (", An", "An"),
+        (", Le", "Le"),
+        (", La", "La"),
+        (", Les", "Les"),
+        (", Der", "Der"),
+        (", Die", "Die"),
+        (", Das", "Das"),
+        (", El", "El"),
+        (", Il", "Il"),
+        (", Lo", "Lo"),
+        (", L'", "L'"),
+    ]
+
+    canonical = clean
+    for suffix, prefix in trailing_articles:
+        if clean.endswith(suffix):
+            canonical = f"{prefix} {clean[:-len(suffix)].strip()}"
+            break
+
+    # Strip leading article to produce article_stripped
+    article_stripped = canonical
+    leading_articles = [
+        "the ", "a ", "an ", "le ", "la ", "les ", "der ", "die ", "das ", "el ", "il ", "lo "
+    ]
+    canonical_lower = canonical.lower()
+    for prefix in leading_articles:
+        if canonical_lower.startswith(prefix):
+            article_stripped = canonical[len(prefix):].strip()
+            break
+    if canonical_lower.startswith("l'"):
+        article_stripped = canonical[2:].strip()
+
+    return canonical, article_stripped, year
+
+
 class MovieRecommender:
     """
     Content-Based Movie Recommender utilizing TF-IDF and Cosine Similarity
@@ -55,7 +116,11 @@ class MovieRecommender:
         self.tfidf_matrix: sparse.csr_matrix | None = None
         self.title_to_indices: dict[str, list[int]] = {}
         self.clean_title_to_indices: dict[str, list[int]] = {}
+        self.article_stripped_to_indices: dict[str, list[int]] = {}
+        self.clean_title_and_year_to_idx: dict[tuple[str, int], int] = {}
         self.movie_id_to_idx: dict[int, int] = {}
+        self.tmdb_id_to_idx: dict[str, int] = {}
+        self.imdb_id_to_idx: dict[str, int] = {}
 
     def load_and_preprocess(self) -> pd.DataFrame:
         """
@@ -205,10 +270,14 @@ class MovieRecommender:
         return self.movies_df
 
     def _build_index_lookups(self):
-        """Builds dictionary lookups for fast title and ID searches with duplicate support."""
+        """Builds dictionary lookups for fast title, year, and ID searches with duplicate support."""
         self.title_to_indices = {}
         self.clean_title_to_indices = {}
+        self.article_stripped_to_indices = {}
+        self.clean_title_and_year_to_idx = {}
         self.movie_id_to_idx = {}
+        self.tmdb_id_to_idx = {}
+        self.imdb_id_to_idx = {}
 
         for idx, row in self.movies_df.iterrows():
             m_id = int(row["movieId"])
@@ -217,13 +286,38 @@ class MovieRecommender:
 
             self.movie_id_to_idx[m_id] = idx
 
+            tmdb_val = str(row.get("tmdbId", "") or "").strip()
+            if tmdb_val and tmdb_val not in ["0", "nan", "none"]:
+                self.tmdb_id_to_idx[tmdb_val] = idx
+
+            imdb_val = str(row.get("imdbId", "") or "").strip()
+            if imdb_val and imdb_val not in ["0", "nan", "none"]:
+                self.imdb_id_to_idx[imdb_val] = idx
+
+            y_val = row.get("year")
+            y_int = int(y_val) if pd.notna(y_val) and str(y_val).isdigit() else None
+
+            # 1. Full title lookup
             if t_full not in self.title_to_indices:
                 self.title_to_indices[t_full] = []
             self.title_to_indices[t_full].append(idx)
 
+            # 2. Clean title lookup
             if t_clean not in self.clean_title_to_indices:
                 self.clean_title_to_indices[t_clean] = []
             self.clean_title_to_indices[t_clean].append(idx)
+
+            # 3. Clean title and year lookup
+            if y_int is not None:
+                self.clean_title_and_year_to_idx[(t_clean, y_int)] = idx
+                self.clean_title_and_year_to_idx[(t_full, y_int)] = idx
+
+            # 4. Article-stripped lookup
+            _, t_stripped, _ = normalize_title_prefix(t_clean)
+            t_stripped_lower = t_stripped.lower().strip()
+            if t_stripped_lower not in self.article_stripped_to_indices:
+                self.article_stripped_to_indices[t_stripped_lower] = []
+            self.article_stripped_to_indices[t_stripped_lower].append(idx)
 
     def fit(self):
         """
@@ -287,35 +381,110 @@ class MovieRecommender:
                 return False
         return False
 
-    def find_movie_idx(self, query: str) -> tuple[int | None, list[str]]:
+    def find_movie_idx(
+        self,
+        query: str,
+        year: Optional[int] = None,
+        tmdb_id: Optional[str] = None,
+    ) -> tuple[int | None, list[str]]:
         """
-        Finds movie index by title or clean title, handling duplicates and fuzzy matching.
+        Finds movie index by title, clean title, year, or TMDb ID,
+        handling duplicate disambiguation, prefix normalization, and fuzzy matching.
+
+        Args:
+            query: Movie title search string.
+            year: Optional explicit release year filter.
+            tmdb_id: Optional explicit TMDb ID string.
 
         Returns:
             tuple: (best_idx or None, list of suggestion strings if not exact)
         """
-        q = query.strip().lower()
+        # 0. TMDb ID direct lookup
+        if tmdb_id is not None:
+            clean_tmdb = str(tmdb_id).strip()
+            if clean_tmdb in self.tmdb_id_to_idx:
+                return self.tmdb_id_to_idx[clean_tmdb], []
 
-        # Helper to pick best index among duplicate title occurrences based on vote_count
-        def resolve_duplicate_indices(indices: list[int]) -> int:
+        raw_q = str(query or "").strip()
+        if not raw_q:
+            return None, []
+
+        # Extract year from query if embedded, e.g. "Emma (1996)"
+        canonical_q, stripped_q, extracted_year = normalize_title_prefix(raw_q)
+        target_year = year if year is not None else extracted_year
+
+        q_clean = canonical_q.lower().strip()
+        q_raw_lower = raw_q.lower().strip()
+        q_stripped = stripped_q.lower().strip()
+
+        # Helper to disambiguate multiple duplicate indices
+        def disambiguate_indices(indices: list[int]) -> tuple[int | None, list[str]]:
             if len(indices) == 1:
-                return indices[0]
-            # Pick the entry with the highest vote_count
-            return max(indices, key=lambda i: self.movies_df.iloc[i]["vote_count"])
+                idx = indices[0]
+                if target_year is not None:
+                    row_y = self.movies_df.iloc[idx].get("year")
+                    if pd.notna(row_y) and int(row_y) != target_year:
+                        return None, [self.movies_df.iloc[idx]["title"]]
+                return idx, []
 
-        # 1. Exact match in full title
-        if q in self.title_to_indices:
-            return resolve_duplicate_indices(self.title_to_indices[q]), []
+            # If target_year is provided, strictly prefer matching release year
+            if target_year is not None:
+                year_matches = [
+                    i for i in indices
+                    if pd.notna(self.movies_df.iloc[i].get("year"))
+                    and int(self.movies_df.iloc[i]["year"]) == target_year
+                ]
+                if year_matches:
+                    return max(year_matches, key=lambda i: self.movies_df.iloc[i]["vote_count"]), []
+                else:
+                    return None, list(dict.fromkeys([self.movies_df.iloc[i]["title"] for i in indices]))
 
-        # 2. Exact match in clean title
-        if q in self.clean_title_to_indices:
-            return resolve_duplicate_indices(self.clean_title_to_indices[q]), []
+            # Otherwise pick highest vote_count
+            return max(indices, key=lambda i: self.movies_df.iloc[i]["vote_count"]), []
 
-        # 3. Partial substring search
+        # 1. Exact match with year if year available
+        if target_year is not None:
+            if (q_clean, target_year) in self.clean_title_and_year_to_idx:
+                return self.clean_title_and_year_to_idx[(q_clean, target_year)], []
+            if (q_raw_lower, target_year) in self.clean_title_and_year_to_idx:
+                return self.clean_title_and_year_to_idx[(q_raw_lower, target_year)], []
+
+        # 2. Exact match in full raw title
+        if q_raw_lower in self.title_to_indices:
+            idx, sugs = disambiguate_indices(self.title_to_indices[q_raw_lower])
+            if idx is not None:
+                return idx, []
+            elif target_year is not None:
+                return None, sugs
+
+        # 3. Exact match in canonical clean title (e.g. "The Dark Knight")
+        if q_clean in self.clean_title_to_indices:
+            idx, sugs = disambiguate_indices(self.clean_title_to_indices[q_clean])
+            if idx is not None:
+                return idx, []
+            elif target_year is not None:
+                return None, sugs
+
+        # 4. Exact match in article-stripped title (e.g. "Dark Knight" -> "The Dark Knight")
+        if q_stripped in self.article_stripped_to_indices:
+            idx, sugs = disambiguate_indices(self.article_stripped_to_indices[q_stripped])
+            if idx is not None:
+                return idx, []
+            elif target_year is not None:
+                return None, sugs
+
+        # 5. Partial substring search (with year filtering if target_year provided)
         substring_matches = []
         for idx, row in self.movies_df.iterrows():
-            if q in row["title"].lower() or q in row["clean_title"].lower():
-                substring_matches.append((idx, row["title"]))
+            t_row = str(row["title"]).lower()
+            c_row = str(row["clean_title"]).lower()
+            if q_clean in t_row or q_clean in c_row or q_stripped in c_row:
+                if target_year is not None:
+                    row_yr = row.get("year")
+                    if pd.notna(row_yr) and int(row_yr) == target_year:
+                        substring_matches.append((idx, row["title"]))
+                else:
+                    substring_matches.append((idx, row["title"]))
                 if len(substring_matches) >= 8:
                     break
 
@@ -325,9 +494,9 @@ class MovieRecommender:
             unique_subs = list(dict.fromkeys([m[1] for m in substring_matches]))
             return None, unique_subs
 
-        # 4. Fuzzy matching using difflib
+        # 6. Fuzzy matching using difflib
         all_titles = self.movies_df["title"].tolist()
-        fuzzy_matches = difflib.get_close_matches(query, all_titles, n=5, cutoff=0.5)
+        fuzzy_matches = difflib.get_close_matches(canonical_q, all_titles, n=5, cutoff=0.5)
 
         if not fuzzy_matches:
             all_cleans = self.movies_df["clean_title"].tolist()
@@ -405,6 +574,8 @@ class MovieRecommender:
         genre_filter: str | None = None,
         min_rating: float = 0.0,
         quality_boost: float = 0.0,
+        year: Optional[int] = None,
+        tmdb_id: Optional[str] = None,
     ) -> dict:
         """
         Recommends top_n movies similar to the query title.
@@ -424,7 +595,7 @@ class MovieRecommender:
             if not self.load_artifacts():
                 self.fit()
 
-        idx, suggestions = self.find_movie_idx(query)
+        idx, suggestions = self.find_movie_idx(query, year=year, tmdb_id=tmdb_id)
 
         if idx is None:
             return {

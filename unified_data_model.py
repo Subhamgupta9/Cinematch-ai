@@ -294,9 +294,8 @@ class UnifiedMovie:
             original_title=title or "Untitled",
             overview=str(row.get("description", "") or "").strip(),
             release_date=f"{year}-01-01" if year else "",
-            release_year=year,
-            original_language="en",  # Default baseline for classic MovieLens US releases
-            origin_country=["US"],
+            original_language=None,  # MovieLens records have no native language annotation; preserve as unknown (None)
+            origin_country=[],  # MovieLens records have no native country annotation; preserve as unknown ([])
             genre_ids=[],
             genre_names=genres,
             keywords=[],

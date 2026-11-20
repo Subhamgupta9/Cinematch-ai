@@ -319,7 +319,7 @@ class CandidateGenerator:
         start_time = time.time()
         deadline = start_time + NETWORK_BUDGET_SECONDS
 
-        resolved_api_key = api_key or get_tmdb_api_key()
+        resolved_api_key = api_key if api_key is not None else get_tmdb_api_key()
         raw_channels: Dict[str, List[UnifiedMovie]] = {
             "ml_content": [],
             "ml_collab": [],

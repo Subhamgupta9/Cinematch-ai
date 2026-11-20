@@ -453,3 +453,26 @@ def test_search_cache_in_memory():
         res2 = search_movies_global("Cached Film")
         assert mock_get.call_count == 1
         assert res1 == res2
+
+
+def test_search_cache_keys_contain_no_api_key(monkeypatch):
+    """Verify that in-memory cache keys do not contain API keys or credentials."""
+    secret_key = "super_secret_tmdb_key_xyz999"
+    monkeypatch.setenv("TMDB_API_KEY", secret_key)
+    _search_cache.clear()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "results": [{"id": 100, "title": "Security Film"}]
+    }
+
+    with patch("requests.get", return_value=mock_resp):
+        search_movies_global("Security Film", api_key=secret_key)
+        discover_movies_global(api_key=secret_key)
+
+    for cache_key in _search_cache.keys():
+        assert secret_key not in cache_key
+        assert secret_key[:6] not in cache_key
+        assert "super_secret" not in cache_key
+

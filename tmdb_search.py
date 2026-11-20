@@ -131,6 +131,9 @@ class _SimpleTTLCache:
     def clear(self) -> None:
         self._cache.clear()
 
+    def keys(self):
+        return self._cache.keys()
+
 
 _search_cache = _SimpleTTLCache(ttl_seconds=3600, max_size=300)
 
@@ -329,7 +332,7 @@ def search_movies_global(
             "message": "TMDb API key is not configured. Global movie search is currently unavailable.",
         }
 
-    cache_key = f"search:{resolved_api_key[:6]}:{clean_query.lower()}:{page}:{year}:{language}:{include_adult}"
+    cache_key = f"search:{clean_query.lower()}:{page}:{year}:{language}:{include_adult}"
     cached = _search_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -483,7 +486,7 @@ def discover_movies_global(
     clean_country = str(origin_country or "").strip().upper() if origin_country and origin_country != "all" else ""
     clean_lang = str(original_language or "").strip().lower() if original_language and original_language != "all" else ""
 
-    cache_key = f"discover:{resolved_api_key[:6]}:{clean_country}:{clean_lang}:{genre_id}:{year}:{sort_by}:{vote_count_gte}:{vote_average_gte}:{page}:{include_adult}"
+    cache_key = f"discover:{clean_country}:{clean_lang}:{genre_id}:{year}:{sort_by}:{vote_count_gte}:{vote_average_gte}:{page}:{include_adult}"
     cached = _search_cache.get(cache_key)
     if cached is not None:
         return cached

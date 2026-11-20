@@ -320,3 +320,97 @@ def test_html_escaping_untrusted_strings():
         assert "<script>" not in escaped
         assert "<b>" not in escaped
 
+
+def test_normalize_title_prefix():
+    """Verify title prefix normalization with leading/trailing articles and year extraction."""
+    from recommender import normalize_title_prefix
+
+    canon, stripped, yr = normalize_title_prefix("Dark Knight, The (2008)")
+    assert canon == "The Dark Knight"
+    assert stripped == "Dark Knight"
+    assert yr == 2008
+
+    canon, stripped, yr = normalize_title_prefix("The Dark Knight")
+    assert canon == "The Dark Knight"
+    assert stripped == "Dark Knight"
+    assert yr is None
+
+    canon, stripped, yr = normalize_title_prefix("Silence of the Lambs, The")
+    assert canon == "The Silence of the Lambs"
+    assert stripped == "Silence of the Lambs"
+    assert yr is None
+
+    canon, stripped, yr = normalize_title_prefix("A Clockwork Orange (1971)")
+    assert canon == "A Clockwork Orange"
+    assert stripped == "Clockwork Orange"
+    assert yr == 1971
+
+    canon, stripped, yr = normalize_title_prefix("Emma")
+    assert canon == "Emma"
+    assert stripped == "Emma"
+    assert yr is None
+
+
+def test_find_movie_idx_with_year_disambiguation(trained_recommender):
+    """Verify duplicate-aware disambiguation between movies with identical titles in different years."""
+    # MovieLens has Emma (1996) and Emma (2009)
+    idx_1996, _ = trained_recommender.find_movie_idx("Emma", year=1996)
+    idx_2009, _ = trained_recommender.find_movie_idx("Emma", year=2009)
+
+    assert idx_1996 is not None
+    assert idx_2009 is not None
+    assert idx_1996 != idx_2009
+
+    row_1996 = trained_recommender.movies_df.iloc[idx_1996]
+    row_2009 = trained_recommender.movies_df.iloc[idx_2009]
+
+    assert int(row_1996["year"]) == 1996
+    assert int(row_2009["year"]) == 2009
+
+    # Query with embedded year in string
+    idx_embedded, _ = trained_recommender.find_movie_idx("Emma (1996)")
+    assert idx_embedded == idx_1996
+
+    # Non-existent year for duplicate title returns None with suggestions
+    idx_none, suggestions = trained_recommender.find_movie_idx("Emma", year=1932)
+    assert idx_none is None
+    assert any("Emma" in s for s in suggestions)
+
+
+def test_find_movie_idx_with_tmdb_id(trained_recommender):
+    """Verify exact resolution by TMDb ID."""
+    # The Dark Knight (2008) has TMDb ID 155
+    idx, _ = trained_recommender.find_movie_idx("", tmdb_id="155")
+    assert idx is not None
+    assert "dark knight" in trained_recommender.movies_df.iloc[idx]["clean_title"].lower()
+
+
+def test_find_movie_idx_symmetric_prefix(trained_recommender):
+    """Verify symmetric resolution with leading, trailing, or stripped article."""
+    idx_leading, _ = trained_recommender.find_movie_idx("The Dark Knight")
+    idx_trailing, _ = trained_recommender.find_movie_idx("Dark Knight, The")
+    idx_stripped, _ = trained_recommender.find_movie_idx("Dark Knight")
+
+    assert idx_leading is not None
+    assert idx_trailing is not None
+    assert idx_stripped is not None
+    assert idx_leading == idx_trailing == idx_stripped
+
+
+def test_rating_sorting_end_to_end_catalog(trained_recommender):
+    """Verify ascending and descending rating sorting across the complete catalog."""
+    df = trained_recommender.movies_df
+
+    # Descending sorting
+    desc_df = df.sort_values(by=["weighted_rating", "vote_count"], ascending=[False, False])
+    desc_ratings = desc_df["weighted_rating"].tolist()
+    for i in range(len(desc_ratings) - 1):
+        assert desc_ratings[i] >= desc_ratings[i + 1]
+
+    # Ascending sorting
+    asc_df = df.sort_values(by=["weighted_rating", "vote_count"], ascending=[True, True])
+    asc_ratings = asc_df["weighted_rating"].tolist()
+    for i in range(len(asc_ratings) - 1):
+        assert asc_ratings[i] <= asc_ratings[i + 1]
+
+

@@ -38,7 +38,7 @@ graph TD
 
     subgraph Recommendation & Discovery Engine
         P1 --> EngineRouter{Discovery Mode}
-        EngineRouter -->|✨ By AI Taste| AIVibe[Vibe & Taste Semantic Matcher]
+        EngineRouter -->|✨ By Thematic Vibe| AIVibe[Rule-Based Thematic & Mood Matcher]
         EngineRouter -->|🎬 By Movie| SmartRec[Smart Hybrid Recommender]
         EngineRouter -->|🎭 By Genre| GenreDisc[Parametric Regional Discover]
         EngineRouter -->|⭐ By Ratings| RatingRank[Bayesian Quality Ranker]
@@ -64,8 +64,8 @@ graph TD
 ## 🎯 Key Features
 
 ### 1. ✦ Flagship Discovery Modes
-- **✨ By AI Taste & Vibe**: Natural language semantic preference input (e.g. *"mind-bending sci-fi with time travel"*, *"heartwarming college friendship without romance"*). Employs intent extraction and negative constraint filtering to return precisely resonant films.
-- **🎬 By Movie Search**: Direct seed matching with title autocomplete, disambiguating remakes and duplicates with multi-source candidate generation.
+- **✨ By Thematic Vibe**: Rule-based thematic keyword and mood mapping (e.g. *"mind-bending sci-fi with time travel"*, *"heartwarming college friendship without romance"*). Employs curated mood dictionaries, genre rules, and negative constraint filtering to return resonant films.
+- **🎬 By Movie Search**: Direct seed matching with title autocomplete, disambiguating remakes and duplicates with multi-source candidate generation and year/TMDb ID resolution.
 - **🎭 By Genre & Region**: Comprehensive discovery filtering across 16 genres and 12 distinct regional industries, including Bollywood, Tollywood (Telugu), Kollywood (Tamil), Mollywood (Malayalam), Sandalwood (Kannada), and World Cinema.
 - **⭐ By Ratings**: Parametric rating sorting with customizable minimum vote thresholds and Bayesian weighted tie-breaking.
 
@@ -73,7 +73,7 @@ graph TD
 - **Official YouTube Player Preview**: Embedded video playback for verified official trailers.
 - **Where to Watch in India (OTT)**: Real-time streaming availability breakdown (Subscription Flatrate, Digital Rent, Buy) for the Indian market, fully attributed to JustWatch.
 - **Cast & Crew Billing**: Actor avatars, character roles, directors, and production metadata.
-- **Artwork Fallbacks**: High-resolution TMDb CDN poster delivery with accessible SVG vector fallbacks when offline.
+- **Artwork Fallbacks**: High-resolution TMDb CDN poster delivery with XML-escaped SVG vector fallbacks when offline.
 
 ### 3. ⚡ High-Performance Sparse Linear Algebra
 - **Zero Dense Matrix Allocation**: Instead of materializing an $O(N^2)$ dense matrix (over 380 MB of RAM for 9,742 titles), feature soup representations are stored as a compressed sparse row matrix (`scipy.sparse.csr_matrix`, ~2.1 MB).
@@ -87,19 +87,21 @@ graph TD
 
 ---
 
-## 📊 Offline Evaluation & Model Benchmarks
+## 🧪 Verified Test Suite & Architecture Guarantees
 
-Evaluation conducted on a 5-fold temporal train/test split of the MovieLens 100k benchmark (100,836 ratings across 9,742 movies):
+All core recommendation flows, data models, and resilience policies are covered by an automated test suite with **100% green verification** across comprehensive test modules:
 
-| Model Architecture | Precision@10 | Recall@10 | NDCG@10 | Catalog Coverage | Diversity (Cosine) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **M1: Popularity Baseline** | 0.0151 | 0.0189 | 0.0163 | 0.22% | 0.142 |
-| **M2: Pure Content-Based (TF-IDF)** | 0.0069 | 0.0071 | 0.0089 | 14.05% | 0.428 |
-| **M3: Content + Bayesian Prior** | 0.0061 | 0.0064 | 0.0075 | 13.90% | 0.435 |
-| **M4: Item-Item Collaborative Filtering**| **0.0102** | **0.0132** | **0.0114** | 10.38% | 0.381 |
-| **M5: Multi-Channel Hybrid Engine** | **0.0082** | **0.0101** | **0.0109** | **13.96%** | **0.441** |
-| *Cold-Start Simulation (Collaborative)*| 0.0000 | 0.0000 | 0.0000 | — | — |
-| *Cold-Start Simulation (Hybrid Engine)*| **0.0240** | **0.0381** | **0.0295** | **8.12%** | **0.412** |
+| Test Module | Coverage Scope | Verified Properties |
+| :--- | :--- | :--- |
+| `test_recommender.py` | Sparse TF-IDF Engine | Title prefix normalization, year-aware duplicate disambiguation, $O(N)$ dot products, 0.0–1.0 score integrity |
+| `test_hybrid_recommender.py` | Multi-Channel Hybrid Blending | Path A collaborative routing, Path B cold-start projection, Minimum-Evidence vocabulary checks, deterministic tie-breaking |
+| `test_collaborative_recommender.py` | Item-Item Pearson Similarity | Co-rating significance shrinkage, user rating centered Pearson correlation, sparse matrix efficiency |
+| `test_candidate_generator.py` | Multi-Source Candidate Retrieval | Canonical ID resolution, source-isolated candidates, remake separation (e.g. Total Recall 1990 vs 2012) |
+| `test_indian_and_global_discovery.py` | Regional & Global Cinema | 7 regional Indian industries (Bollywood, Tollywood, Kollywood, etc.), post-2018 discovery, honest API error handling |
+| `test_unified_model.py` | Source-Isolated Data Models | MovieLens 5-star vs TMDb 10-point scale isolation, non-fabrication of language/country metadata |
+| `test_global_search.py` | TMDb REST Client & Caching | Rate-limiting resilience, in-memory TTL caching, API-key-free cache keys |
+| `test_preprocessing.py` | MovieLens Cleaning & Metadata Soup | Deterministic genre tokenization, rating Bayesian priors, decade and narrative soup schema |
+| `test_tmdb.py` | Security & Multimodal Assets | XML-escaped SVG poster fallbacks, JustWatch OTT availability parsing, YouTube video trailer extraction |
 
 ---
 
