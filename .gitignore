@@ -1,0 +1,35 @@
+# Python Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Distribution / Build
+build/
+dist/
+*.egg-info/
+.aidesigner/*
+!.aidesigner/.gitkeep
+
+# Local Scratch, Audits & Logs
+scratch/
+*.log
+.system_generated/
+.agents/
+.github/skills/
