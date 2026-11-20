@@ -69,9 +69,10 @@ def get_tmdb_api_key() -> str:
     Returns empty string if unconfigured.
     Never throws exceptions.
     """
-    # 1. Check environment variable (honoring explicit empty strings set for testing)
-    if "TMDB_API_KEY" in os.environ:
-        return os.environ["TMDB_API_KEY"].strip()
+    # 1. Check environment variable
+    env_key = os.environ.get("TMDB_API_KEY", "").strip()
+    if env_key:
+        return env_key
 
     # 2. Check Streamlit secrets if available
     try:

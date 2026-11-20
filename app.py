@@ -12,6 +12,7 @@ Accessibility Standard: WCAG 2.2 AA (Full contrast, keyboard navigable, 0px over
 import sys
 import html
 import random
+import re
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 import streamlit as st
@@ -119,7 +120,7 @@ if "target_query" in st.session_state and st.session_state.target_query:
     target = st.session_state.pop("target_query")
     if isinstance(target, dict):
         st.session_state["selected_entity"] = target
-        t_title = target.get("title", "")
+        t_title = re.sub(r"\s*\(\d{4}\)$", "", str(target.get("title", ""))).strip()
         t_year = f" ({target['release_year']})" if target.get("release_year") else ""
         st.session_state["active_query"] = f"{t_title}{t_year}".strip()
         # Track in history

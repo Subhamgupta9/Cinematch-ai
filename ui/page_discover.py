@@ -18,6 +18,7 @@ import urllib.parse
 from typing import Optional, List, Dict, Any, Callable
 import streamlit as st
 import requests
+import pandas as pd
 
 from tmdb_client import (
     get_tmdb_api_key,
@@ -263,6 +264,61 @@ def interpret_ai_preference(
                 if len(recs) >= top_n:
                     break
 
+        # Fallback to local catalog if TMDb was unreachable or returned 0 results
+        if len(recs) < top_n:
+            try:
+                if hasattr(recommender, "movies_df") and recommender.movies_df is not None:
+                    _df = recommender.movies_df.copy()
+                else:
+                    from recommender import MovieRecommender
+                    _rec_inst = MovieRecommender()
+                    _rec_inst.load_artifacts()
+                    _df = _rec_inst.movies_df.copy()
+
+                if detected_genres:
+                    genre_names = [TMDB_GENRE_MAP.get(g, "") for g in detected_genres if g in TMDB_GENRE_MAP]
+                    for gn in genre_names:
+                        if gn:
+                            matching_df = _df[_df["genres"].str.contains(gn, case=False, na=False)]
+                            if not matching_df.empty:
+                                _df = matching_df
+                                break
+
+                _df = _df[_df["vote_count"] >= 30].sort_values(by="weighted_rating", ascending=False)
+                for _, row in _df.head(top_n * 2).iterrows():
+                    t = row.get("clean_title") or row.get("title", "")
+                    if any(r["title"].lower() == t.lower() for r in recs):
+                        continue
+                    r_vote = round(float(row.get("avg_rating", 3.8)) * 2, 1)
+                    yr = int(row["year"]) if pd.notna(row.get("year")) else None
+                    g_list = row.get("genre_list") or (row.get("genres", "").split("|") if isinstance(row.get("genres"), str) else [])
+                    recs.append({
+                        "title": t,
+                        "clean_title": t,
+                        "release_year": yr,
+                        "year": yr,
+                        "tmdb_id": str(row.get("tmdbId") or ""),
+                        "tmdbId": str(row.get("tmdbId") or ""),
+                        "poster_url": None,
+                        "poster_path": None,
+                        "original_language": "en",
+                        "genre_names": g_list,
+                        "genre_ids": [],
+                        "similarity_score": 0.88,
+                        "ranking_score": 0.88,
+                        "vote_average": r_vote,
+                        "overview": row.get("description", "") or f"Critically acclaimed classic: {t}",
+                        "source": "ai_catalog_fallback",
+                        "explanation": {
+                            "match_score_pct": 88,
+                            "summary": "Curated classic matching your preference vibe",
+                        },
+                    })
+                    if len(recs) >= top_n:
+                        break
+            except Exception:
+                pass
+
     return recs[:top_n]
 
 
@@ -472,8 +528,9 @@ def fetch_smart_recommendations(
             from recommender import MovieRecommender
             _local_eng = MovieRecommender()
             _local_eng.load_artifacts()
-            _local_recs = _local_eng.recommend(query_title, top_n=top_n)
-            for lr in _local_recs:
+            _local_res = _local_eng.recommend(query_title, top_n=top_n)
+            _local_list = _local_res.get("recommendations", []) if isinstance(_local_res, dict) else _local_res
+            for lr in _local_list:
                 recs.append({
                     "title": lr["title"],
                     "clean_title": lr.get("clean_title") or lr["title"],
@@ -485,11 +542,31 @@ def fetch_smart_recommendations(
                     "genre_names": lr.get("genres", "").split("|") if isinstance(lr.get("genres"), str) else [],
                     "similarity_score": lr.get("similarity_score", 0.85),
                     "ranking_score": lr.get("similarity_score", 0.85),
-                    "vote_average": lr.get("tmdb_vote_average", 7.5),
-                    "overview": lr.get("overview", ""),
+                    "vote_average": round(float(lr.get("avg_rating", 3.8)) * 2, 1),
+                    "overview": lr.get("description", "") or lr.get("overview", ""),
                     "source": "catalog_offline_engine",
                     "explanation": {"match_score_pct": int(round(lr.get("similarity_score", 0.85) * 100)), "summary": "Matching narrative themes and genre alignment"},
                 })
+
+            if not recs and hasattr(_local_eng, "movies_df") and _local_eng.movies_df is not None:
+                _pop = _local_eng.movies_df.sort_values(by="weighted_rating", ascending=False).head(top_n)
+                for _, lr in _pop.iterrows():
+                    recs.append({
+                        "title": lr["title"],
+                        "clean_title": lr.get("clean_title") or lr["title"],
+                        "release_year": int(lr["year"]) if pd.notna(lr.get("year")) else None,
+                        "year": int(lr["year"]) if pd.notna(lr.get("year")) else None,
+                        "tmdb_id": str(lr.get("tmdbId") or ""),
+                        "tmdbId": str(lr.get("tmdbId") or ""),
+                        "original_language": "en",
+                        "genre_names": lr.get("genres", "").split("|") if isinstance(lr.get("genres"), str) else [],
+                        "similarity_score": 0.85,
+                        "ranking_score": 0.85,
+                        "vote_average": round(float(lr.get("avg_rating", 4.0)) * 2, 1),
+                        "overview": lr.get("description", ""),
+                        "source": "catalog_popular_fallback",
+                        "explanation": {"match_score_pct": 85, "summary": "Acclaimed title from curated local catalog"},
+                    })
         except Exception:
             pass
 
@@ -986,6 +1063,44 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                             if len(recommendations) >= 6:
                                 break
 
+            # Robust local fallback if TMDb key is missing or no results:
+            if not recommendations:
+                try:
+                    if hasattr(recommender, "movies_df") and recommender.movies_df is not None:
+                        _df = recommender.movies_df.copy()
+                    else:
+                        from recommender import MovieRecommender
+                        _rec_inst = MovieRecommender()
+                        _rec_inst.load_artifacts()
+                        _df = _rec_inst.movies_df.copy()
+
+                    if g_name != "All Genres":
+                        _df = _df[_df["genres"].str.contains(g_name, case=False, na=False)]
+                    _df = _df[_df["vote_count"] >= 20].sort_values(by="weighted_rating", ascending=False)
+                    for _, row in _df.head(6).iterrows():
+                        r_vote = round(float(row.get("avg_rating", 3.8)) * 2, 1)
+                        recommendations.append({
+                            "title": row["title"],
+                            "clean_title": row.get("clean_title") or row["title"],
+                            "release_year": int(row["year"]) if pd.notna(row.get("year")) else None,
+                            "year": int(row["year"]) if pd.notna(row.get("year")) else None,
+                            "tmdb_id": str(row.get("tmdbId") or ""),
+                            "tmdbId": str(row.get("tmdbId") or ""),
+                            "original_language": "en",
+                            "genre_names": row.get("genres", "").split("|") if isinstance(row.get("genres"), str) else [g_name],
+                            "similarity_score": round(min(0.99, r_vote / 10.0), 2),
+                            "ranking_score": round(min(0.99, r_vote / 10.0), 2),
+                            "vote_average": r_vote,
+                            "overview": row.get("description", "") or f"Acclaimed {g_name} cinema.",
+                            "source": "catalog_genre_fallback",
+                            "explanation": {
+                                "match_score_pct": int(round(min(99, max(60, r_vote * 10)))),
+                                "summary": f"⭐ Top acclaimed {g_name} classic ({int(row.get('vote_count', 0)):,} verified reviews)",
+                            },
+                        })
+                except Exception:
+                    pass
+
         else:
             # Mode 3: By Ratings (Sorted High to Low or Low to High)
             is_high_to_low = str(st.session_state.get("ratings_mode_sort_direction", "Highest")).startswith("Highest")
@@ -1100,7 +1215,7 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
             for idx, rec in enumerate(recommendations[:6]):
                 col = r_cols[idx % 3]
                 with col:
-                    r_title = rec.get("clean_title") or rec.get("title", "")
+                    r_title = re.sub(r"\s*\(\d{4}\)$", "", str(rec.get("clean_title") or rec.get("title", ""))).strip()
                     r_year = rec.get("release_year") or rec.get("year") or "N/A"
                     r_score = rec.get("explanation", {}).get("match_score_pct") or int(round(rec.get("similarity_score", 0.85) * 100))
                     r_genres = rec.get("genre_names") or (rec.get("genres", "").split("|") if isinstance(rec.get("genres"), str) else [])
@@ -1180,18 +1295,19 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
 
         spot_movie = selected_entity or {}
         spot_title = spot_movie.get("title") or active_query
+        clean_spot_title = re.sub(r"\s*\(\d{4}\)$", "", str(spot_title)).strip()
         spot_year = spot_movie.get("release_year") or spot_movie.get("year") or "2014"
         spot_overview = spot_movie.get("overview") or spot_movie.get("description") or "A landmark cinematic achievement renowned for brilliant direction, impactful storytelling, and thematic resonance."
         spot_tmdb_id = str(spot_movie.get("tmdb_id") or spot_movie.get("id") or "157336")
         spot_genres = spot_movie.get("genre_names") or (spot_movie.get("genres", "").split("|") if isinstance(spot_movie.get("genres"), str) else ["Sci-Fi", "Drama"])
         spot_poster = get_cached_poster(
             spot_tmdb_id,
-            spot_title,
+            clean_spot_title,
             spot_year if isinstance(spot_year, int) else None,
             spot_genres,
             direct_url=spot_movie.get("poster_url"),
         )
-        spot_encoded = urllib.parse.quote(str(spot_title))
+        spot_encoded = urllib.parse.quote(str(clean_spot_title))
         spot_modal_url = f"?movie_modal={spot_tmdb_id}&movie_title={spot_encoded}&match_score=98"
 
         # India Watch Providers
@@ -1206,13 +1322,13 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
                     ✦ FEATURED SPOTLIGHT & INDIA STREAMING
                 </div>
                 <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: flex-start;">
-                    <a href="{spot_modal_url}" target="_self" class="aura-card-anchor" title="Click to view Cast, Ratings, Trailer & Details for {html.escape(spot_title)}">
-                        <img src="{spot_poster}" style="width: 130px; border-radius: 12px; object-fit: cover; aspect-ratio: 2/3; box-shadow: 0 8px 24px rgba(0,0,0,0.6); cursor: pointer; transition: transform 200ms ease;" alt="{html.escape(spot_title)}" />
+                    <a href="{spot_modal_url}" target="_self" class="aura-card-anchor" title="Click to view Cast, Ratings, Trailer & Details for {html.escape(clean_spot_title)}">
+                        <img src="{spot_poster}" style="width: 130px; border-radius: 12px; object-fit: cover; aspect-ratio: 2/3; box-shadow: 0 8px 24px rgba(0,0,0,0.6); cursor: pointer; transition: transform 200ms ease;" alt="{html.escape(clean_spot_title)}" />
                     </a>
                     <div style="flex: 1; min-width: 250px;">
                         <a href="{spot_modal_url}" target="_self" class="aura-card-anchor" style="color: inherit;">
                             <h3 style="font-size: 1.5rem; font-weight: 800; color: #FFFFFF; margin: 0 0 0.35rem 0; cursor: pointer;">
-                                {html.escape(spot_title)} ({spot_year}) <span style="font-size: 0.85rem; color: #00F298; font-weight: 600;">▶ Click for Trailer & Cast</span>
+                                {html.escape(clean_spot_title)} ({spot_year}) <span style="font-size: 0.85rem; color: #00F298; font-weight: 600;">▶ Click for Trailer & Cast</span>
                             </h3>
                         </a>
                         <div style="font-size: 0.85rem; color: #8B98A5; margin-bottom: 0.75rem;">
@@ -1233,7 +1349,7 @@ def render_discover_page(recommender: Any, request_movie_switch: Callable[[Any],
             if st.button("🎬 View Full Cast, Trailer & Details ↗", key="spotlight_view_modal_btn", type="primary", use_container_width=True):
                 st.session_state["active_modal_req"] = {
                     "tmdb_id": spot_tmdb_id,
-                    "title": spot_title,
+                    "title": clean_spot_title,
                     "match_score": 98,
                 }
                 st.rerun()

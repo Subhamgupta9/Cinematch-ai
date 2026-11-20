@@ -896,9 +896,14 @@ class MovieRecommender:
         top_df = self.movies_df.sort_values(
             by=["weighted_rating", "vote_count"], ascending=[False, False]
         ).head(top_n)
-        return top_df[
-            ["movieId", "title", "clean_title", "year", "genres", "genre_list", "avg_rating", "vote_count", "description"]
-        ].to_dict(orient="records")
+        cols = [
+            "movieId", "title", "clean_title", "year", "genres", "genre_list", "avg_rating", "vote_count", "description"
+        ]
+        if "tmdbId" in top_df.columns:
+            cols.append("tmdbId")
+        if "imdbId" in top_df.columns:
+            cols.append("imdbId")
+        return top_df[cols].to_dict(orient="records")
 
     def get_all_titles(self) -> list[str]:
         """Returns all movie titles sorted alphabetically."""
