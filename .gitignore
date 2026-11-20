@@ -24,8 +24,7 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
-.aidesigner/*
-!.aidesigner/.gitkeep
+.aidesigner/
 
 # Local Scratch, Audits & Logs
 scratch/

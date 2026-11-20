@@ -68,7 +68,7 @@ class MovieRecommender:
         links_path = self.data_dir / "links.csv"
 
         if not movies_path.exists():
-            raise FileNotFoundError(f"movies.csv not found at {movies_path}. Run data/download_data.py first.")
+            raise FileNotFoundError(f"movies.csv not found at {movies_path}.")
 
         # 1. Load movies
         movies = pd.read_csv(movies_path)
